@@ -165,24 +165,6 @@ class _ManageExamsPageState extends State<ManageExamsPage> {
     _applyFilter();
   }
 
-  // Resolve student full name by ID
-  String _getStudentName(String studentId) {
-    try {
-      final student = _allStudents.firstWhere(
-        (s) => s['studentId'] == studentId,
-        orElse: () => <String, dynamic>{},
-      );
-      return student['fullName']?.toString() ?? 'Unknown Student';
-    } catch (e) {
-      return 'Unknown Student';
-    }
-  }
-
-  // Format a DateTime for display
-  String _formatDateTime(DateTime dateTime) {
-    return '${dateTime.day}/${dateTime.month}/${dateTime.year} ${dateTime.hour}:${dateTime.minute.toString().padLeft(2, '0')}';
-  }
-
   // Choose a color representing exam status (upcoming/ongoing/ended)
   Color _getExamStatusColor(Exam exam) {
     if (!exam.isActive) return Colors.grey;

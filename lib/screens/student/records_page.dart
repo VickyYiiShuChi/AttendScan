@@ -269,19 +269,6 @@ class RecordsPageState extends State<RecordsPage> with WidgetsBindingObserver {
     }
   }
 
-  IconData _getStatusIcon(String status) {
-    switch (status) {
-      case 'Present':
-        return Icons.check_circle_rounded;
-      case 'Absent':
-        return Icons.cancel_rounded;
-      case 'Upcoming':
-        return Icons.calendar_today_rounded;
-      default:
-        return Icons.help_outline_rounded;
-    }
-  }
-
   String _formatDateTime(DateTime dateTime) {
     final day = dateTime.day.toString().padLeft(2, '0');
     final month = dateTime.month.toString().padLeft(2, '0');

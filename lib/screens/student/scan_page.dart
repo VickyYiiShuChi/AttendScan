@@ -8,7 +8,6 @@ import 'package:attend_scan/constants/app_styles.dart';
 import 'package:attend_scan/constants/app_dimensions.dart';
 import 'package:attend_scan/services/firebase_service.dart';
 import 'package:attend_scan/services/connectivity_service.dart';
-import 'package:provider/provider.dart';
 import 'package:attend_scan/services/notification_service.dart';
 import 'package:geolocator/geolocator.dart';  
 import 'package:attend_scan/services/location_service.dart';  

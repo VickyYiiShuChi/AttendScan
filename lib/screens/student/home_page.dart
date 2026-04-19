@@ -270,8 +270,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _loadData(forceRefresh: true);
   }
 
-  // ... rest of your existing methods (_examFromJson, _getUpcomingExamsData, etc.)
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(

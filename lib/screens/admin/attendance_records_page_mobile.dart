@@ -279,18 +279,6 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
     }
   }
 
-  Future<void> _exportAttendance() async {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Export is only available on web platform'),
-          backgroundColor: Colors.orange,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(

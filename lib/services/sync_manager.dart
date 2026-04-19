@@ -43,7 +43,6 @@ class SyncManager extends ChangeNotifier {
         await _syncStudentData(user.studentId ?? '');
       }
 
-      print('Background sync completed');
     } catch (e) {
       print('Background sync failed: $e');
     } finally {

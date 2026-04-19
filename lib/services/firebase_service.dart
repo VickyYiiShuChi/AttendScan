@@ -2,7 +2,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
-import 'dart:io';
 import 'package:intl/intl.dart';
 import 'package:attend_scan/services/location_service.dart';
 
@@ -301,7 +300,7 @@ class FirebaseService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseStorage _storage = FirebaseStorage.instance;
 
-  // ==================== USER AUTHENTICATION ====================
+  // ==================== AUTHENTICATION METHODS ====================
 
   /// Register a new student
   Future<String?> registerStudent({
@@ -438,8 +437,6 @@ class FirebaseService {
     }
   }
 
-  // `getCurrentStudent()` removed; use `getCurrentUser()` returning `UserModel`.
-
   /// Sign out current user
   Future<void> signOut() async {
     await _auth.signOut();
@@ -494,7 +491,7 @@ class FirebaseService {
     }
   }
 
-  // ==================== EXAM RELATED METHODS (STUDENT) ====================
+  // ==================== STUDENT EXAM METHODS ====================
 
   /// Get all exams that a student is allowed to take
   Future<List<Exam>> getExamsForStudent(String studentId) async {
@@ -582,7 +579,110 @@ class FirebaseService {
     }
   }
 
-  // ==================== EXAM RELATED METHODS (ADMIN) ====================
+  /// Check if student has attended an exam
+  Future<bool> hasAttendedExam(String examId, String studentId) async {
+    try {
+      final snapshot = await _firestore
+          .collection('attendance')
+          .where('examId', isEqualTo: examId)
+          .where('studentId', isEqualTo: studentId)
+          .where('status', isEqualTo: 'present')
+          .limit(1)
+          .get();
+      
+      return snapshot.docs.isNotEmpty;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Get attendance history for a student
+  Future<List<AttendanceRecord>> getAttendanceHistory(String studentId) async {
+    try {
+      final snapshot = await _firestore
+          .collection('attendance')
+          .where('studentId', isEqualTo: studentId)
+          .orderBy('scannedAt', descending: true)
+          .get();
+      
+      // Group by examId and keep only the latest record per exam
+      final Map<String, DocumentSnapshot> latestRecords = {};
+      
+      for (var doc in snapshot.docs) {
+        final examId = doc.data()['examId'] as String? ?? '';
+        if (examId.isNotEmpty) {
+          // If we haven't seen this exam before, or this record is newer
+          if (!latestRecords.containsKey(examId)) {
+            latestRecords[examId] = doc;
+          } else {
+            // Compare scannedAt timestamps to keep the latest
+            final existing = latestRecords[examId]!.data() as Map<String, dynamic>;
+            final current = doc.data() as Map<String, dynamic>;
+            
+            final existingTime = existing['scannedAt'] is Timestamp
+                ? (existing['scannedAt'] as Timestamp).toDate()
+                : DateTime.parse(existing['scannedAt'] ?? DateTime.now().toIso8601String());
+            
+            final currentTime = current['scannedAt'] is Timestamp
+                ? (current['scannedAt'] as Timestamp).toDate()
+                : DateTime.parse(current['scannedAt'] ?? DateTime.now().toIso8601String());
+            
+            if (currentTime.isAfter(existingTime)) {
+              latestRecords[examId] = doc;
+            }
+          }
+        }
+      }
+      
+      // Convert the latest records to AttendanceRecord objects
+      return latestRecords.values
+          .map((doc) => AttendanceRecord.fromFirestore(doc))
+          .toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Create absent attendance record if needed
+  Future<void> _createAbsentAttendanceIfNeeded(String examId, String studentId) async {
+    try {
+      // Use a deterministic document ID to avoid race-created duplicates.
+      final docId = '${examId}_$studentId';
+      final attendanceRef = _firestore.collection('attendance').doc(docId);
+
+      // If a doc already exists with this deterministic ID, nothing to do.
+      final snapshot = await attendanceRef.get();
+      if (snapshot.exists) return;
+
+      // As an extra safety, also check for any existing records via query.
+      final existing = await _firestore
+          .collection('attendance')
+          .where('examId', isEqualTo: examId)
+          .where('studentId', isEqualTo: studentId)
+          .limit(1)
+          .get();
+      if (existing.docs.isNotEmpty) return;
+
+      final now = DateTime.now();
+      await attendanceRef.set({
+        'attendanceId': docId,
+        'examId': examId,
+        'studentId': studentId,
+        'indexNo': '',
+        'indexNoWords': '',
+        'seatNo': '',
+        'scannedAt': now.toIso8601String(),
+        'status': 'absent',
+        'autoCreated': true,
+        'createdAt': now.toIso8601String(),
+        'updatedAt': now.toIso8601String(),
+      });
+    } catch (e) {
+      // Silently handle error
+    }
+  }
+
+  // ==================== ADMIN EXAM METHODS ====================
 
   /// Create a new exam (admin only)
   Future<Map<String, dynamic>> createExam({
@@ -737,7 +837,38 @@ class FirebaseService {
     }
   }
 
-  // ==================== ATTENDANCE RELATED METHODS (ADMIN) ====================
+  /// Delete an exam (admin only)
+  Future<void> deleteExam(String examId, String adminUid) async {
+    try {
+      // Verify admin role (lookup by stored auth uid)
+      final adminQuery = await _firestore.collection('users')
+          .where('uid', isEqualTo: adminUid)
+          .limit(1)
+          .get();
+      if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
+        throw Exception('Unauthorized. Admin access required.');
+      }
+
+      final attendanceSnapshot = await _firestore
+          .collection('attendance')
+          .where('examId', isEqualTo: examId)
+          .get();
+
+      final batch = _firestore.batch();
+      for (var doc in attendanceSnapshot.docs) {
+        batch.delete(doc.reference);
+      }
+      
+      batch.delete(_firestore.collection('exams').doc(examId));
+      
+      await batch.commit();
+      
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  // ==================== ADMIN ATTENDANCE METHODS ====================
 
   /// Get attendance records for a specific exam (admin only)
   Future<Map<String, dynamic>> getExamAttendance({
@@ -863,7 +994,205 @@ class FirebaseService {
     }
   }
 
-  // ==================== STUDENT MANAGEMENT (ADMIN) ====================
+  /// Update attendance seat number (admin only)
+  Future<Map<String, dynamic>> updateAttendanceSeatNo({
+    required String examId,
+    required String studentId,
+    required String seatNo,
+    required String adminUid,
+  }) async {
+    try {
+      // Verify admin role (lookup by stored auth uid)
+      final adminQuery = await _firestore.collection('users')
+          .where('uid', isEqualTo: adminUid)
+          .limit(1)
+          .get();
+      if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
+        return {
+          'success': false,
+          'message': 'Unauthorized. Admin access required.',
+        };
+      }
+
+      // Find the attendance record
+      final attendanceQuery = await _firestore
+          .collection('attendance')
+          .where('examId', isEqualTo: examId)
+          .where('studentId', isEqualTo: studentId)
+          .limit(1)
+          .get();
+
+      if (attendanceQuery.docs.isEmpty) {
+        return {
+          'success': false,
+          'message': 'Attendance record not found',
+        };
+      }
+
+      // Update the seat number
+      await attendanceQuery.docs.first.reference.update({
+        'seatNo': seatNo,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+
+      return {
+        'success': true,
+        'message': 'Seat number updated successfully',
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Failed to update seat number: $e',
+      };
+    }
+  }
+
+  /// Export attendance report (admin only)
+  Future<Map<String, dynamic>> exportAttendanceReport({
+    required String examId,
+    required String adminUid,
+  }) async {
+    try {
+      // Verify admin role (lookup by stored auth uid)
+      final adminQuery = await _firestore.collection('users')
+          .where('uid', isEqualTo: adminUid)
+          .limit(1)
+          .get();
+      if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
+        return {
+          'success': false,
+          'message': 'Unauthorized. Admin access required.',
+        };
+      }
+
+      // Get exam details
+      final examDoc = await _firestore.collection('exams').doc(examId).get();
+      if (!examDoc.exists) {
+        return {
+          'success': false,
+          'message': 'Exam not found',
+        };
+      }
+      final exam = Exam.fromFirestore(examDoc);
+
+      // Get all attendance records
+      final attendanceSnapshot = await _firestore
+          .collection('attendance')
+          .where('examId', isEqualTo: examId)
+          .get();
+
+      final attendanceRecords = attendanceSnapshot.docs
+          .map((doc) => AttendanceRecord.fromFirestore(doc))
+          .toList();
+
+      // Get all students data
+      final studentsSnapshot = await _firestore
+          .collection('users')
+          .where('role', isEqualTo: 'student')
+          .get();
+
+      final studentsMap = <String, Map<String, dynamic>>{};
+      for (var doc in studentsSnapshot.docs) {
+        final data = doc.data();
+        final studentId = data['studentId'] ?? '';
+        if (studentId.isNotEmpty) {
+          studentsMap[studentId] = {
+            'fullName': data['fullName'] ?? 'Unknown',
+            'faculty': data['faculty'] ?? 'Not specified',
+            'programme': data['programme'] ?? 'Not specified',
+            'indexNo': data['indexNo'] ?? '',
+          };
+        }
+      }
+
+      // Create CSV data
+      final List<Map<String, String>> csvData = [];
+
+      // Header
+      csvData.add({
+        'Exam Name': exam.subjectName,
+        'Date': exam.formattedDate,
+        'Time': exam.formattedTime,
+        'Location': exam.location,
+      });
+
+      csvData.add({}); // Empty row
+
+      // Column headers
+      csvData.add({
+        'Student ID': 'Student ID',
+        'Full Name': 'Full Name',
+        'Faculty': 'Faculty',
+        'Programme': 'Programme',
+        'Index No': 'Index No',
+        'Status': 'Status',
+        'Seat No': 'Seat No',
+        'Scanned At': 'Scanned At',
+      });
+
+      // Student rows
+      for (final studentId in exam.allowedClasses) {
+        final student = studentsMap[studentId] ?? {};
+        final attendance = attendanceRecords.firstWhere(
+          (a) => a.studentId == studentId,
+          orElse: () => AttendanceRecord(
+            attendanceId: '',
+            examId: examId,
+            studentId: studentId,
+            indexNo: '',
+            indexNoWords: '',
+            seatNo: '',
+            scannedAt: DateTime.now(),
+            status: 'absent',
+          ),
+        );
+
+        csvData.add({
+          'Student ID': studentId,
+          'Full Name': student['fullName'] ?? 'Unknown',
+          'Faculty': student['faculty'] ?? 'Not specified',
+          'Programme': student['programme'] ?? 'Not specified',
+          'Index No': student['indexNo'] ?? '',
+          'Status': attendance.status.toUpperCase(),
+          'Seat No': attendance.seatNo.isNotEmpty ? attendance.seatNo : '-',
+          'Scanned At': attendance.status == 'present' 
+              ? DateFormat('dd/MM/yyyy HH:mm:ss').format(attendance.scannedAt)
+              : '-',
+        });
+      }
+
+      // Summary
+      final presentCount = attendanceRecords.where((a) => a.status == 'present').length;
+      final absentCount = exam.allowedClasses.length - presentCount;
+      final attendanceRate = exam.allowedClasses.isNotEmpty 
+          ? (presentCount / exam.allowedClasses.length * 100).toStringAsFixed(1)
+          : '0.0';
+
+      csvData.add({}); // Empty row
+      csvData.add({
+        'Summary': 'Summary',
+        '': '',
+        'Total Students': exam.allowedClasses.length.toString(),
+        'Present': presentCount.toString(),
+        'Absent': absentCount.toString(),
+        'Attendance Rate': '$attendanceRate%',
+      });
+
+      return {
+        'success': true,
+        'data': csvData,
+        'filename': '${exam.subjectName}_${exam.formattedDate}_Attendance.csv',
+        'exam': exam,
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Failed to export attendance: $e',
+      };
+    }
+  }
+
+  // ==================== ADMIN STUDENT MANAGEMENT ====================
 
   /// Get all students (admin only)
   Future<Map<String, dynamic>> getAllStudents(String adminUid) async {
@@ -915,8 +1244,92 @@ class FirebaseService {
     }
   }
 
-  // ==================== HTR BY SUBJECT NAME METHOD ====================
+  // ==================== STUDENT PROFILE MANAGEMENT ====================
 
+  /// Update student profile
+  Future<void> updateStudentProfile({
+    required String studentId,
+    String? fullName,
+    String? indexNo,
+    String? avatarStyle,
+    String? faculty,      
+    String? programme,    
+  }) async {
+    try {
+      final userQuery = await _firestore
+          .collection('users')
+          .where('studentId', isEqualTo: studentId)
+          .limit(1)
+          .get();
+      
+      if (userQuery.docs.isEmpty) return;
+      
+      final updates = <String, dynamic>{
+        'updatedAt': DateTime.now().toIso8601String(),
+      };
+      
+      if (fullName != null && fullName.isNotEmpty) {
+        updates['fullName'] = fullName;
+      }
+      
+      if (indexNo != null) {
+        updates['indexNo'] = indexNo;
+      }
+      
+      if (avatarStyle != null) {
+        updates['avatarStyle'] = avatarStyle;
+      }
+
+      if (faculty != null) {
+        updates['faculty'] = faculty;
+      }
+    
+      if (programme != null) {
+        updates['programme'] = programme;
+      }
+      
+      await _firestore.collection('users').doc(userQuery.docs.first.id).update(updates);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Get student by ID
+  Future<UserModel?> getStudentById(String studentId) async {
+    try {
+      final userQuery = await _firestore
+          .collection('users')
+          .where('studentId', isEqualTo: studentId)
+          .limit(1)
+          .get();
+      
+      if (userQuery.docs.isEmpty) return null;
+      
+      final doc = userQuery.docs.first;
+      final data = doc.data();
+
+      return UserModel(
+        uid: doc.id,
+        email: data['email'] ?? '',
+        fullName: data['fullName'] ?? '',
+        role: data['role'] ?? 'student',
+        studentId: data['studentId'],
+        indexNo: data['indexNo'] ?? '',
+        faculty: data['faculty'] ?? '',
+        programme: data['programme'] ?? '',
+        avatarStyle: data['avatarStyle'] ?? 'avataaars',
+        createdAt: UserModel._parseDateTime(data['createdAt']),
+        updatedAt: UserModel._parseDateTime(data['updatedAt']),
+        lastLogin: UserModel._parseDateTime(data['lastLogin']),
+      );
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ==================== HTR (HANDWRITTEN TEXT RECOGNITION) METHODS ====================
+
+  /// Process HTR result by subject name
   Future<Map<String, dynamic>> processHTRResultBySubject({
     required String studentId,
     required Map<String, dynamic> HTRData,
@@ -1210,387 +1623,6 @@ class FirebaseService {
     }
   }
 
-  // ==================== ATTENDANCE RELATED METHODS (STUDENT) ====================
-
-  Future<bool> hasAttendedExam(String examId, String studentId) async {
-    try {
-      final snapshot = await _firestore
-          .collection('attendance')
-          .where('examId', isEqualTo: examId)
-          .where('studentId', isEqualTo: studentId)
-          .where('status', isEqualTo: 'present')
-          .limit(1)
-          .get();
-      
-      return snapshot.docs.isNotEmpty;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  Future<List<AttendanceRecord>> getAttendanceHistory(String studentId) async {
-    try {
-      final snapshot = await _firestore
-          .collection('attendance')
-          .where('studentId', isEqualTo: studentId)
-          .orderBy('scannedAt', descending: true)
-          .get();
-      
-      // Group by examId and keep only the latest record per exam
-      final Map<String, DocumentSnapshot> latestRecords = {};
-      
-      for (var doc in snapshot.docs) {
-        final examId = doc.data()['examId'] as String? ?? '';
-        if (examId.isNotEmpty) {
-          // If we haven't seen this exam before, or this record is newer
-          if (!latestRecords.containsKey(examId)) {
-            latestRecords[examId] = doc;
-          } else {
-            // Compare scannedAt timestamps to keep the latest
-            final existing = latestRecords[examId]!.data() as Map<String, dynamic>;
-            final current = doc.data() as Map<String, dynamic>;
-            
-            final existingTime = existing['scannedAt'] is Timestamp
-                ? (existing['scannedAt'] as Timestamp).toDate()
-                : DateTime.parse(existing['scannedAt'] ?? DateTime.now().toIso8601String());
-            
-            final currentTime = current['scannedAt'] is Timestamp
-                ? (current['scannedAt'] as Timestamp).toDate()
-                : DateTime.parse(current['scannedAt'] ?? DateTime.now().toIso8601String());
-            
-            if (currentTime.isAfter(existingTime)) {
-              latestRecords[examId] = doc;
-            }
-          }
-        }
-      }
-      
-      // Convert the latest records to AttendanceRecord objects
-      return latestRecords.values
-          .map((doc) => AttendanceRecord.fromFirestore(doc))
-          .toList();
-    } catch (e) {
-      return [];
-    }
-  }
-
-  Future<void> _createAbsentAttendanceIfNeeded(String examId, String studentId) async {
-    try {
-      // Use a deterministic document ID to avoid race-created duplicates.
-      final docId = '${examId}_$studentId';
-      final attendanceRef = _firestore.collection('attendance').doc(docId);
-
-      // If a doc already exists with this deterministic ID, nothing to do.
-      final snapshot = await attendanceRef.get();
-      if (snapshot.exists) return;
-
-      // As an extra safety, also check for any existing records via query.
-      final existing = await _firestore
-          .collection('attendance')
-          .where('examId', isEqualTo: examId)
-          .where('studentId', isEqualTo: studentId)
-          .limit(1)
-          .get();
-      if (existing.docs.isNotEmpty) return;
-
-      final now = DateTime.now();
-      await attendanceRef.set({
-        'attendanceId': docId,
-        'examId': examId,
-        'studentId': studentId,
-        'indexNo': '',
-        'indexNoWords': '',
-        'seatNo': '',
-        'scannedAt': now.toIso8601String(),
-        'status': 'absent',
-        'autoCreated': true,
-        'createdAt': now.toIso8601String(),
-        'updatedAt': now.toIso8601String(),
-      });
-    } catch (e) {
-      // Silently handle error
-    }
-  }
-
-  Future<Map<String, dynamic>> updateAttendanceSeatNo({
-    required String examId,
-    required String studentId,
-    required String seatNo,
-    required String adminUid,
-  }) async {
-    try {
-      // Verify admin role (lookup by stored auth uid)
-      final adminQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: adminUid)
-          .limit(1)
-          .get();
-      if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
-        return {
-          'success': false,
-          'message': 'Unauthorized. Admin access required.',
-        };
-      }
-
-      // Find the attendance record
-      final attendanceQuery = await _firestore
-          .collection('attendance')
-          .where('examId', isEqualTo: examId)
-          .where('studentId', isEqualTo: studentId)
-          .limit(1)
-          .get();
-
-      if (attendanceQuery.docs.isEmpty) {
-        return {
-          'success': false,
-          'message': 'Attendance record not found',
-        };
-      }
-
-      // Update the seat number
-      await attendanceQuery.docs.first.reference.update({
-        'seatNo': seatNo,
-        'updatedAt': DateTime.now().toIso8601String(),
-      });
-
-      return {
-        'success': true,
-        'message': 'Seat number updated successfully',
-      };
-    } catch (e) {
-      return {
-        'success': false,
-        'message': 'Failed to update seat number: $e',
-      };
-    }
-  }
-  
-    // ==================== EXPORT ATTENDANCE REPORT ====================
-  
-  Future<Map<String, dynamic>> exportAttendanceReport({
-    required String examId,
-    required String adminUid,
-  }) async {
-    try {
-      // Verify admin role (lookup by stored auth uid)
-      final adminQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: adminUid)
-          .limit(1)
-          .get();
-      if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
-        return {
-          'success': false,
-          'message': 'Unauthorized. Admin access required.',
-        };
-      }
-
-      // Get exam details
-      final examDoc = await _firestore.collection('exams').doc(examId).get();
-      if (!examDoc.exists) {
-        return {
-          'success': false,
-          'message': 'Exam not found',
-        };
-      }
-      final exam = Exam.fromFirestore(examDoc);
-
-      // Get all attendance records
-      final attendanceSnapshot = await _firestore
-          .collection('attendance')
-          .where('examId', isEqualTo: examId)
-          .get();
-
-      final attendanceRecords = attendanceSnapshot.docs
-          .map((doc) => AttendanceRecord.fromFirestore(doc))
-          .toList();
-
-      // Get all students data
-      final studentsSnapshot = await _firestore
-          .collection('users')
-          .where('role', isEqualTo: 'student')
-          .get();
-
-      final studentsMap = <String, Map<String, dynamic>>{};
-      for (var doc in studentsSnapshot.docs) {
-        final data = doc.data();
-        final studentId = data['studentId'] ?? '';
-        if (studentId.isNotEmpty) {
-          studentsMap[studentId] = {
-            'fullName': data['fullName'] ?? 'Unknown',
-            'faculty': data['faculty'] ?? 'Not specified',
-            'programme': data['programme'] ?? 'Not specified',
-            'indexNo': data['indexNo'] ?? '',
-          };
-        }
-      }
-
-      // Create CSV data
-      final List<Map<String, String>> csvData = [];
-
-      // Header
-      csvData.add({
-        'Exam Name': exam.subjectName,
-        'Date': exam.formattedDate,
-        'Time': exam.formattedTime,
-        'Location': exam.location,
-      });
-
-      csvData.add({}); // Empty row
-
-      // Column headers
-      csvData.add({
-        'Student ID': 'Student ID',
-        'Full Name': 'Full Name',
-        'Faculty': 'Faculty',
-        'Programme': 'Programme',
-        'Index No': 'Index No',
-        'Status': 'Status',
-        'Seat No': 'Seat No',
-        'Scanned At': 'Scanned At',
-      });
-
-      // Student rows
-      for (final studentId in exam.allowedClasses) {
-        final student = studentsMap[studentId] ?? {};
-        final attendance = attendanceRecords.firstWhere(
-          (a) => a.studentId == studentId,
-          orElse: () => AttendanceRecord(
-            attendanceId: '',
-            examId: examId,
-            studentId: studentId,
-            indexNo: '',
-            indexNoWords: '',
-            seatNo: '',
-            scannedAt: DateTime.now(),
-            status: 'absent',
-          ),
-        );
-
-        csvData.add({
-          'Student ID': studentId,
-          'Full Name': student['fullName'] ?? 'Unknown',
-          'Faculty': student['faculty'] ?? 'Not specified',
-          'Programme': student['programme'] ?? 'Not specified',
-          'Index No': student['indexNo'] ?? '',
-          'Status': attendance.status.toUpperCase(),
-          'Seat No': attendance.seatNo.isNotEmpty ? attendance.seatNo : '-',
-          'Scanned At': attendance.status == 'present' 
-              ? DateFormat('dd/MM/yyyy HH:mm:ss').format(attendance.scannedAt)
-              : '-',
-        });
-      }
-
-      // Summary
-      final presentCount = attendanceRecords.where((a) => a.status == 'present').length;
-      final absentCount = exam.allowedClasses.length - presentCount;
-      final attendanceRate = exam.allowedClasses.isNotEmpty 
-          ? (presentCount / exam.allowedClasses.length * 100).toStringAsFixed(1)
-          : '0.0';
-
-      csvData.add({}); // Empty row
-      csvData.add({
-        'Summary': 'Summary',
-        '': '',
-        'Total Students': exam.allowedClasses.length.toString(),
-        'Present': presentCount.toString(),
-        'Absent': absentCount.toString(),
-        'Attendance Rate': '$attendanceRate%',
-      });
-
-      return {
-        'success': true,
-        'data': csvData,
-        'filename': '${exam.subjectName}_${exam.formattedDate}_Attendance.csv',
-        'exam': exam,
-      };
-    } catch (e) {
-      return {
-        'success': false,
-        'message': 'Failed to export attendance: $e',
-      };
-    }
-  }
-
-  // ==================== STUDENT PROFILE MANAGEMENT ====================
-
-  Future<void> updateStudentProfile({
-    required String studentId,
-    String? fullName,
-    String? indexNo,
-    String? avatarStyle,
-    String? faculty,      
-    String? programme,    
-  }) async {
-    try {
-      final userQuery = await _firestore
-          .collection('users')
-          .where('studentId', isEqualTo: studentId)
-          .limit(1)
-          .get();
-      
-      if (userQuery.docs.isEmpty) return;
-      
-      final updates = <String, dynamic>{
-        'updatedAt': DateTime.now().toIso8601String(),
-      };
-      
-      if (fullName != null && fullName.isNotEmpty) {
-        updates['fullName'] = fullName;
-      }
-      
-      if (indexNo != null) {
-        updates['indexNo'] = indexNo;
-      }
-      
-      if (avatarStyle != null) {
-        updates['avatarStyle'] = avatarStyle;
-      }
-
-      if (faculty != null) {
-        updates['faculty'] = faculty;
-      }
-    
-      if (programme != null) {
-        updates['programme'] = programme;
-      }
-      
-      await _firestore.collection('users').doc(userQuery.docs.first.id).update(updates);
-    } catch (e) {
-      rethrow;
-    }
-  }
-
-  Future<UserModel?> getStudentById(String studentId) async {
-    try {
-      final userQuery = await _firestore
-          .collection('users')
-          .where('studentId', isEqualTo: studentId)
-          .limit(1)
-          .get();
-      
-      if (userQuery.docs.isEmpty) return null;
-      
-      final doc = userQuery.docs.first;
-      final data = doc.data();
-
-      return UserModel(
-        uid: doc.id,
-        email: data['email'] ?? '',
-        fullName: data['fullName'] ?? '',
-        role: data['role'] ?? 'student',
-        studentId: data['studentId'],
-        indexNo: data['indexNo'] ?? '',
-        faculty: data['faculty'] ?? '',
-        programme: data['programme'] ?? '',
-        avatarStyle: data['avatarStyle'] ?? 'avataaars',
-        createdAt: UserModel._parseDateTime(data['createdAt']),
-        updatedAt: UserModel._parseDateTime(data['updatedAt']),
-        lastLogin: UserModel._parseDateTime(data['lastLogin']),
-      );
-    } catch (e) {
-      return null;
-    }
-  }
-
   // ==================== HELPER METHODS ====================
 
   String _convertToWords(String indexNo) {
@@ -1607,7 +1639,6 @@ class FirebaseService {
     
     return indexNo.split('').map((char) => mapping[char.toUpperCase()] ?? char).join(' ');
   }
-
 
   String _wordsToCompact(String words) {
     final parts = words.trim().split(' ');
@@ -1659,37 +1690,6 @@ class FirebaseService {
         return 'Incorrect password';
       default:
         return 'An error occurred. Please try again';
-    }
-  }
-
-  /// Delete an exam (admin only)
-  Future<void> deleteExam(String examId, String adminUid) async {
-    try {
-      // Verify admin role (lookup by stored auth uid)
-      final adminQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: adminUid)
-          .limit(1)
-          .get();
-      if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
-        throw Exception('Unauthorized. Admin access required.');
-      }
-
-      final attendanceSnapshot = await _firestore
-          .collection('attendance')
-          .where('examId', isEqualTo: examId)
-          .get();
-
-      final batch = _firestore.batch();
-      for (var doc in attendanceSnapshot.docs) {
-        batch.delete(doc.reference);
-      }
-      
-      batch.delete(_firestore.collection('exams').doc(examId));
-      
-      await batch.commit();
-      
-    } catch (e) {
-      rethrow;
     }
   }
 }
