@@ -52,8 +52,8 @@ class _ManageExamsPageState extends State<ManageExamsPage> {
     try {
       final user = await _firebaseService.getCurrentUser();
       if (user != null && user.isAdmin) {
-        final examsResult = await _firebaseService.getAllExams(adminUid: user.uid);
-        final studentsResult = await _firebaseService.getAllStudents(user.uid);
+        final examsResult = await _firebaseService.getAllExams(adminEmail: user.email);
+        final studentsResult = await _firebaseService.getAllStudents(user.email);
         
         List<Map<String, dynamic>> students = [];
         if (studentsResult['success'] == true) {
@@ -2887,7 +2887,7 @@ class _ManageExamsPageState extends State<ManageExamsPage> {
                                                 endTime: endDateTime,
                                                 allowedClasses: selectedStudents,
                                                 isActive: isActive,
-                                                adminUid: user.uid,
+                                                adminEmail: user.email
                                               );
                                             } else {
                                               result = await _firebaseService.createExam(
@@ -2896,7 +2896,7 @@ class _ManageExamsPageState extends State<ManageExamsPage> {
                                                 startTime: startDateTime,
                                                 endTime: endDateTime,
                                                 allowedClasses: selectedStudents,
-                                                adminUid: user.uid,
+                                                adminEmail: user.email
                                               );
                                             }
                                             
@@ -3526,7 +3526,7 @@ class _ManageExamsPageState extends State<ManageExamsPage> {
                                   ),
                                 );
                                 
-                                await _firebaseService.deleteExam(exam.examId, user.uid);
+                                await _firebaseService.deleteExam(exam.examId, user.email);
                                 
                                 setState(() {
                                   _allExams.removeWhere((e) => e.examId == exam.examId);

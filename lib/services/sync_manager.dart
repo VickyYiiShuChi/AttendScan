@@ -52,14 +52,14 @@ class SyncManager extends ChangeNotifier {
   }
 
   // Sync admin-specific data (exams, students)
-  Future<void> _syncAdminData(String adminUid) async {
+  Future<void> _syncAdminData(String adminEmail) async {
     try {
-      final examsResult = await _firebaseService.getAllExams(adminUid: adminUid);
+      final examsResult = await _firebaseService.getAllExams(adminEmail: adminEmail);
       if (examsResult['success'] == true) {
         await _storage.cacheExams(examsResult['exams']);
       }
 
-      final studentsResult = await _firebaseService.getAllStudents(adminUid);
+      final studentsResult = await _firebaseService.getAllStudents(adminEmail);
       if (studentsResult['success'] == true) {
         await _storage.cacheStudents(studentsResult['students']);
       }

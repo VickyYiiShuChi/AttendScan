@@ -43,8 +43,8 @@ class _AdminHomePageState extends State<AdminHomePage> with TickerProviderStateM
       if (user != null && user.isAdmin) {
         _adminName = user.fullName;
         
-        final examsResult = await _firebaseService.getAllExams(adminUid: user.uid);
-        final studentsResult = await _firebaseService.getAllStudents(user.uid);
+        final examsResult = await _firebaseService.getAllExams(adminEmail: user.email);
+        final studentsResult = await _firebaseService.getAllStudents(user.email);
         
         final exams = examsResult['exams'] as List? ?? [];
         final students = studentsResult['students'] as List? ?? [];

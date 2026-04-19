@@ -68,8 +68,8 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
     try {
       final user = await _firebaseService.getCurrentUser();
       if (user != null && user.isAdmin) {
-        final examsResult = await _firebaseService.getAllExams(adminUid: user.uid);
-        final studentsResult = await _firebaseService.getAllStudents(user.uid);
+        final examsResult = await _firebaseService.getAllExams(adminEmail: user.email);
+        final studentsResult = await _firebaseService.getAllStudents(user.email);
         
         List<Exam> exams = [];
         if (examsResult['success'] == true) {
@@ -121,7 +121,7 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
       if (user != null && user.isAdmin) {
         final result = await _firebaseService.getExamAttendance(
           examId: exam.examId,
-          adminUid: user.uid,
+          adminEmail: user.email,
         );
         
         setState(() {

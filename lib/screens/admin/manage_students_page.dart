@@ -63,10 +63,10 @@ class _ManageStudentsPageState extends State<ManageStudentsPage> with TickerProv
       final user = await _firebaseService.getCurrentUser();
       if (user != null && user.isAdmin) {
         // Load all students
-        final studentsResult = await _firebaseService.getAllStudents(user.uid);
+        final studentsResult = await _firebaseService.getAllStudents(user.email);
         
         // Load all exams to check which exams each student is assigned to
-        final examsResult = await _firebaseService.getAllExams(adminUid: user.uid);
+        final examsResult = await _firebaseService.getAllExams(adminEmail: user.email);
         
         List<Map<String, dynamic>> students = [];
         if (studentsResult['success'] == true) {

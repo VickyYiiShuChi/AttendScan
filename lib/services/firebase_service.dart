@@ -46,7 +46,7 @@ class UserModel {
     Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
     
     return UserModel(
-      uid: data['uid'] ?? doc.id,
+      uid: doc.id,
       email: data['email'] ?? '',
       fullName: data['fullName'] ?? '',
       role: data['role'] ?? 'student',
@@ -340,7 +340,6 @@ class FirebaseService {
       // Save to users collection with role = 'student'
       // Use `studentId` as the document ID and store the auth `uid` inside the doc
       await _firestore.collection('users').doc(studentId).set({
-        'uid': userCredential.user!.uid,
         'email': email,
         'fullName': fullName,
         'role': 'student',
@@ -377,7 +376,7 @@ class FirebaseService {
       // Get user data from Firestore by querying the `uid` field (doc id may be studentId)
       final userQuery = await _firestore
           .collection('users')
-          .where('uid', isEqualTo: userCredential.user!.uid)
+          .where('email', isEqualTo: email)
           .limit(1)
           .get();
 
@@ -425,7 +424,7 @@ class FirebaseService {
     try {
       // Query the users collection by the stored auth uid (document id may be studentId)
       final userQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: user.uid)
+          .where('email', isEqualTo: user.email) 
           .limit(1)
           .get();
 
@@ -691,12 +690,12 @@ class FirebaseService {
     required DateTime startTime,
     required DateTime endTime,
     required List<String> allowedClasses,
-    required String adminUid,
+    required String adminEmail,
   }) async {
     try {
       // Verify admin role (lookup by stored auth uid)
       final adminQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: adminUid)
+          .where('email', isEqualTo: adminEmail) 
           .limit(1)
           .get();
       if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
@@ -728,7 +727,7 @@ class FirebaseService {
         'allowedClasses': allowedClasses,
         'isActive': true,
         'createdAt': now.toIso8601String(),
-        'createdBy': adminUid,
+        'createdBy': adminEmail,
       });
 
       return {
@@ -753,12 +752,12 @@ class FirebaseService {
     required DateTime? endTime,
     required List<String>? allowedClasses,
     required bool? isActive,
-    required String adminUid,
+    required String adminEmail,
   }) async {
     try {
       // Verify admin role (lookup by stored auth uid)
       final adminQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: adminUid)
+          .where('email', isEqualTo: adminEmail) 
           .limit(1)
           .get();
       if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
@@ -795,13 +794,13 @@ class FirebaseService {
 
   /// Get all exams (admin only)
   Future<Map<String, dynamic>> getAllExams({
-    required String adminUid,
+    required String adminEmail,
     bool? isActive,
   }) async {
     try {
       // Verify admin role (lookup by stored auth uid)
       final adminQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: adminUid)
+          .where('email', isEqualTo: adminEmail) 
           .limit(1)
           .get();
       if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
@@ -838,11 +837,11 @@ class FirebaseService {
   }
 
   /// Delete an exam (admin only)
-  Future<void> deleteExam(String examId, String adminUid) async {
+  Future<void> deleteExam(String examId, String adminEmail) async {
     try {
       // Verify admin role (lookup by stored auth uid)
       final adminQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: adminUid)
+          .where('email', isEqualTo: adminEmail) 
           .limit(1)
           .get();
       if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
@@ -873,12 +872,12 @@ class FirebaseService {
   /// Get attendance records for a specific exam (admin only)
   Future<Map<String, dynamic>> getExamAttendance({
     required String examId,
-    required String adminUid,
+    required String adminEmail,
   }) async {
     try {
       // Verify admin role (lookup by stored auth uid)
       final adminQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: adminUid)
+          .where('email', isEqualTo: adminEmail) 
           .limit(1)
           .get();
       if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
@@ -999,12 +998,12 @@ class FirebaseService {
     required String examId,
     required String studentId,
     required String seatNo,
-    required String adminUid,
+    required String adminEmail,
   }) async {
     try {
       // Verify admin role (lookup by stored auth uid)
       final adminQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: adminUid)
+          .where('email', isEqualTo: adminEmail) 
           .limit(1)
           .get();
       if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
@@ -1050,12 +1049,12 @@ class FirebaseService {
   /// Export attendance report (admin only)
   Future<Map<String, dynamic>> exportAttendanceReport({
     required String examId,
-    required String adminUid,
+    required String adminEmail,
   }) async {
     try {
       // Verify admin role (lookup by stored auth uid)
       final adminQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: adminUid)
+          .where('email', isEqualTo: adminEmail) 
           .limit(1)
           .get();
       if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
@@ -1195,11 +1194,11 @@ class FirebaseService {
   // ==================== ADMIN STUDENT MANAGEMENT ====================
 
   /// Get all students (admin only)
-  Future<Map<String, dynamic>> getAllStudents(String adminUid) async {
+  Future<Map<String, dynamic>> getAllStudents(String adminEmail) async {
     try {
       // Verify admin role (lookup by stored auth uid)
       final adminQuery = await _firestore.collection('users')
-          .where('uid', isEqualTo: adminUid)
+          .where('email', isEqualTo: adminEmail) 
           .limit(1)
           .get();
       if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
