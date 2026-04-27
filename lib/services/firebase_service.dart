@@ -236,6 +236,9 @@ class AttendanceRecord {
   final String? scannedLocation;
   final double? scannedLatitude;
   final double? scannedLongitude;
+  final bool isAcknowledged;  
+  final DateTime? acknowledgedAt;  
+  final String? acknowledgedBy;  
 
   AttendanceRecord({
     required this.attendanceId,
@@ -249,6 +252,9 @@ class AttendanceRecord {
     this.scannedLocation,
     this.scannedLatitude,
     this.scannedLongitude,
+    this.isAcknowledged = false,  
+    this.acknowledgedAt,  
+    this.acknowledgedBy, 
   });
 
   factory AttendanceRecord.fromFirestore(DocumentSnapshot doc) {
@@ -268,6 +274,13 @@ class AttendanceRecord {
       scannedLocation: data['scannedLocation']?.toString(),
       scannedLatitude: data['scannedLatitude'] != null ? (data['scannedLatitude'] as num).toDouble() : null,
       scannedLongitude: data['scannedLongitude'] != null ? (data['scannedLongitude'] as num).toDouble() : null,
+      isAcknowledged: data['isAcknowledged'] ?? false,  
+      acknowledgedAt: data['acknowledgedAt'] != null
+          ? (data['acknowledgedAt'] is Timestamp
+              ? (data['acknowledgedAt'] as Timestamp).toDate()
+              : DateTime.parse(data['acknowledgedAt']))
+          : null,
+      acknowledgedBy: data['acknowledgedBy']?.toString(),
     );
   }
 
@@ -283,6 +296,9 @@ class AttendanceRecord {
       if (scannedLocation != null) 'scannedLocation': scannedLocation,
       if (scannedLatitude != null) 'scannedLatitude': scannedLatitude,
       if (scannedLongitude != null) 'scannedLongitude': scannedLongitude,
+      'isAcknowledged': isAcknowledged,  
+      if (acknowledgedAt != null) 'acknowledgedAt': acknowledgedAt!.toIso8601String(),
+      if (acknowledgedBy != null) 'acknowledgedBy': acknowledgedBy,
     };
   }
   
@@ -875,9 +891,9 @@ class FirebaseService {
     required String adminEmail,
   }) async {
     try {
-      // Verify admin role (lookup by stored auth uid)
+      // Verify admin role
       final adminQuery = await _firestore.collection('users')
-          .where('email', isEqualTo: adminEmail) 
+          .where('email', isEqualTo: adminEmail)
           .limit(1)
           .get();
       if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
@@ -959,6 +975,7 @@ class FirebaseService {
             seatNo: '',
             scannedAt: DateTime.now(),
             status: 'absent',
+            isAcknowledged: false,
           ),
         );
 
@@ -972,6 +989,10 @@ class FirebaseService {
           'scannedLocation': attendance.scannedLocation,
           'scannedLatitude': attendance.scannedLatitude,
           'scannedLongitude': attendance.scannedLongitude,
+          'isAcknowledged': attendance.isAcknowledged, 
+          'acknowledgedAt': attendance.acknowledgedAt,  
+          'acknowledgedBy': attendance.acknowledgedBy,  
+          'attendanceId': attendance.attendanceId,  
         });
       }
 
@@ -983,6 +1004,8 @@ class FirebaseService {
         'totalStudents': exam.allowedClasses.length,
         'presentCount': attendanceRecords.where((a) => a.status == 'present').length,
         'absentCount': attendanceRecords.where((a) => a.status == 'absent').length,
+        'acknowledgedCount': attendanceRecords.where((a) => a.status == 'present' && a.isAcknowledged).length,  // NEW
+        'unacknowledgedCount': attendanceRecords.where((a) => a.status == 'present' && !a.isAcknowledged).length,  // NEW
       };
     } catch (e) {
       return {
@@ -1619,6 +1642,203 @@ class FirebaseService {
         'error': 'System error',
         'message': 'Failed to process attendance',
       };
+    }
+  }
+
+  // ==================== ADMIN ATTENDANCE MANAGEMENT ====================
+
+  /// Acknowledge an attendance record (admin only)
+  Future<Map<String, dynamic>> acknowledgeAttendance({
+    required String attendanceId,
+    required String adminEmail,
+    required String adminName,
+  }) async {
+    try {
+      // Verify admin role
+      final adminQuery = await _firestore.collection('users')
+          .where('email', isEqualTo: adminEmail)
+          .limit(1)
+          .get();
+      if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
+        return {
+          'success': false,
+          'message': 'Unauthorized. Admin access required.',
+        };
+      }
+
+      final attendanceRef = _firestore.collection('attendance').doc(attendanceId);
+      final doc = await attendanceRef.get();
+      
+      if (!doc.exists) {
+        return {
+          'success': false,
+          'message': 'Attendance record not found',
+        };
+      }
+
+      final now = DateTime.now();
+      await attendanceRef.update({
+        'isAcknowledged': true,
+        'acknowledgedAt': now.toIso8601String(),
+        'acknowledgedBy': adminEmail,
+        'updatedAt': now.toIso8601String(),
+      });
+
+      return {
+        'success': true,
+        'message': 'Attendance acknowledged successfully',
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Failed to acknowledge attendance: $e',
+      };
+    }
+  }
+
+  /// Batch acknowledge multiple attendance records (admin only)
+  Future<Map<String, dynamic>> batchAcknowledgeAttendance({
+    required List<String> attendanceIds,
+    required String adminEmail,
+    required String adminName,
+  }) async {
+    try {
+      // Verify admin role
+      final adminQuery = await _firestore.collection('users')
+          .where('email', isEqualTo: adminEmail)
+          .limit(1)
+          .get();
+      if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
+        return {
+          'success': false,
+          'message': 'Unauthorized. Admin access required.',
+          'acknowledgedCount': 0,
+        };
+      }
+
+      final batch = _firestore.batch();
+      final now = DateTime.now();
+      int acknowledgedCount = 0;
+
+      for (final attendanceId in attendanceIds) {
+        final attendanceRef = _firestore.collection('attendance').doc(attendanceId);
+        batch.update(attendanceRef, {
+          'isAcknowledged': true,
+          'acknowledgedAt': now.toIso8601String(),
+          'acknowledgedBy': adminEmail,
+          'updatedAt': now.toIso8601String(),
+        });
+        acknowledgedCount++;
+      }
+
+      await batch.commit();
+
+      return {
+        'success': true,
+        'message': '$acknowledgedCount attendance records acknowledged',
+        'acknowledgedCount': acknowledgedCount,
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Failed to batch acknowledge attendance: $e',
+        'acknowledgedCount': 0,
+      };
+    }
+  }
+
+  /// Unacknowledge an attendance record (admin only - for correction)
+  Future<Map<String, dynamic>> unacknowledgeAttendance({
+    required String attendanceId,
+    required String adminEmail,
+  }) async {
+    try {
+      // Verify admin role
+      final adminQuery = await _firestore.collection('users')
+          .where('email', isEqualTo: adminEmail)
+          .limit(1)
+          .get();
+      if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
+        return {
+          'success': false,
+          'message': 'Unauthorized. Admin access required.',
+        };
+      }
+
+      final attendanceRef = _firestore.collection('attendance').doc(attendanceId);
+      await attendanceRef.update({
+        'isAcknowledged': false,
+        'acknowledgedAt': FieldValue.delete(),
+        'acknowledgedBy': FieldValue.delete(),
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+
+      return {
+        'success': true,
+        'message': 'Attendance unacknowledged successfully',
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Failed to unacknowledge attendance: $e',
+      };
+    }
+  }
+
+  /// Get unacknowledged attendance records for an exam
+  Future<List<Map<String, dynamic>>> getUnacknowledgedAttendance({
+    required String examId,
+    required String adminEmail,
+  }) async {
+    try {
+      final adminQuery = await _firestore.collection('users')
+          .where('email', isEqualTo: adminEmail)
+          .limit(1)
+          .get();
+      if (adminQuery.docs.isEmpty || adminQuery.docs.first.data()?['role'] != 'admin') {
+        return [];
+      }
+
+      final snapshot = await _firestore
+          .collection('attendance')
+          .where('examId', isEqualTo: examId)
+          .where('status', isEqualTo: 'present')
+          .where('isAcknowledged', isEqualTo: false)
+          .orderBy('scannedAt', descending: true)
+          .get();
+
+      final List<Map<String, dynamic>> records = [];
+      
+      for (final doc in snapshot.docs) {
+        final record = AttendanceRecord.fromFirestore(doc);
+        
+        // Get student name
+        final studentQuery = await _firestore
+            .collection('users')
+            .where('studentId', isEqualTo: record.studentId)
+            .limit(1)
+            .get();
+        
+        String studentName = 'Unknown';
+        if (studentQuery.docs.isNotEmpty) {
+          studentName = studentQuery.docs.first.data()['fullName'] ?? 'Unknown';
+        }
+        
+        records.add({
+          'attendanceId': record.attendanceId,
+          'studentId': record.studentId,
+          'studentName': studentName,
+          'indexNo': record.indexNo,
+          'seatNo': record.seatNo,
+          'scannedAt': record.scannedAt,
+          'scannedLocation': record.scannedLocation,
+          'isWithinUtar': record.isWithinUtar,
+        });
+      }
+      
+      return records;
+    } catch (e) {
+      return [];
     }
   }
 

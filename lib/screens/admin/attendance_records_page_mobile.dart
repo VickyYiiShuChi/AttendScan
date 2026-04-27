@@ -1,4 +1,3 @@
-// Mobile version 
 import 'package:flutter/material.dart';
 import 'package:attend_scan/constants/app_colors.dart';
 import 'package:attend_scan/constants/app_styles.dart';
@@ -34,6 +33,11 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
   bool _sortAscending = true;
   
   final TextEditingController _searchController = TextEditingController();
+
+  // ==================== ACKNOWLEDGEMENT STATE ====================
+  final Set<String> _selectedAttendanceIds = <String>{};
+  bool _isSelectionMode = false;
+  int _ackFilterIndex = 0; // 0: All Present, 1: Acknowledged, 2: Unacknowledged
 
   @override
   void initState() {
@@ -114,6 +118,8 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
     setState(() {
       _isLoadingAttendance = true;
       _attendanceData = null;
+      _selectedAttendanceIds.clear();
+      _isSelectionMode = false;
     });
     
     try {
@@ -139,6 +145,171 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
       setState(() {
         _isLoadingAttendance = false;
       });
+    }
+  }
+
+  // ==================== ACKNOWLEDGEMENT METHODS ====================
+
+  void _toggleSelectionMode() {
+    setState(() {
+      _isSelectionMode = !_isSelectionMode;
+      if (!_isSelectionMode) {
+        _selectedAttendanceIds.clear();
+      }
+    });
+  }
+
+  void _selectAll() {
+    setState(() {
+      final presentStudents = _getPresentStudents();
+      for (var student in presentStudents) {
+        final attendanceId = student['attendanceId'];
+        if (attendanceId != null && attendanceId.isNotEmpty) {
+          _selectedAttendanceIds.add(attendanceId);
+        }
+      }
+    });
+  }
+
+  void _deselectAll() {
+    setState(() {
+      _selectedAttendanceIds.clear();
+    });
+  }
+
+  List<Map<String, dynamic>> _getPresentStudents() {
+    if (_attendanceData == null) return [];
+    final allStudents = _attendanceData!['allStudents'] as List? ?? [];
+    return allStudents
+        .where((s) => s['status'] == 'present')
+        .cast<Map<String, dynamic>>()
+        .toList();
+  }
+
+  Future<void> _batchAcknowledge() async {
+    if (_selectedAttendanceIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No attendance records selected'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Confirm Acknowledgment'),
+        content: Text(
+          'Are you sure you want to acknowledge ${_selectedAttendanceIds.length} attendance record(s)?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      setState(() {
+        _isLoadingAttendance = true;
+      });
+
+      final user = await _firebaseService.getCurrentUser();
+      if (user != null && user.isAdmin) {
+        final result = await _firebaseService.batchAcknowledgeAttendance(
+          attendanceIds: _selectedAttendanceIds.toList(),
+          adminEmail: user.email,
+          adminName: user.fullName,
+        );
+
+        if (result['success'] == true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.check_circle_rounded, color: Colors.white),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(result['message'])),
+                ],
+              ),
+              backgroundColor: Colors.teal,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          _toggleSelectionMode();
+          await _loadAttendanceForExam(_selectedExam!);
+        } else {
+          throw Exception(result['message']);
+        }
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to acknowledge: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingAttendance = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _acknowledgeSingle(String attendanceId) async {
+    try {
+      setState(() {
+        _isLoadingAttendance = true;
+      });
+
+      final user = await _firebaseService.getCurrentUser();
+      if (user != null && user.isAdmin) {
+        final result = await _firebaseService.acknowledgeAttendance(
+          attendanceId: attendanceId,
+          adminEmail: user.email,
+          adminName: user.fullName,
+        );
+
+        if (result['success'] == true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Attendance acknowledged'),
+              backgroundColor: Colors.teal,
+              duration: Duration(seconds: 2),
+            ),
+          );
+          await _loadAttendanceForExam(_selectedExam!);
+        } else {
+          throw Exception(result['message']);
+        }
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to acknowledge: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingAttendance = false;
+        });
+      }
     }
   }
 
@@ -202,6 +373,8 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
     }
   }
 
+  // ==================== SORT & FILTER ====================
+
   List<Map<String, dynamic>> _sortStudents(List<Map<String, dynamic>> students) {
     final sorted = List<Map<String, dynamic>>.from(students);
     
@@ -232,6 +405,7 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
     
     final allStudents = _attendanceData!['allStudents'] as List? ?? [];
     
+    // First filter by presence status
     List<Map<String, dynamic>> statusFiltered;
     switch (_selectedFilterIndex) {
       case 1:
@@ -242,6 +416,19 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
         break;
       default:
         statusFiltered = allStudents.cast<Map<String, dynamic>>().toList();
+    }
+    
+    // Then filter by acknowledgement status (only for present students)
+    if (_ackFilterIndex == 1) {
+      statusFiltered = statusFiltered.where((s) {
+        if (s['status'] != 'present') return true;
+        return s['isAcknowledged'] == true;
+      }).toList();
+    } else if (_ackFilterIndex == 2) {
+      statusFiltered = statusFiltered.where((s) {
+        if (s['status'] != 'present') return false;
+        return s['isAcknowledged'] == false;
+      }).toList();
     }
     
     if (_searchQuery.isNotEmpty) {
@@ -281,6 +468,14 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
 
   @override
   Widget build(BuildContext context) {
+    if (_isSelectionMode) {
+      return Scaffold(
+        backgroundColor: AppColors.getBackgroundColor(context),
+        appBar: _buildSelectionModeAppBar(),
+        body: _buildBodyAttendanceList(),
+      );
+    }
+
     return Scaffold(
       backgroundColor: AppColors.getBackgroundColor(context),
       appBar: AppBar(
@@ -322,6 +517,7 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
                 )
               else ...[
                 SliverToBoxAdapter(child: _buildStatsCards()),
+                SliverToBoxAdapter(child: _buildAckStatsRow()),
                 SliverToBoxAdapter(child: _buildFilterTabs()),
                 SliverToBoxAdapter(child: _buildSearchBar()),
                 if (_getFilteredStudents().isNotEmpty)
@@ -332,7 +528,7 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
                     child: Center(child: Text('No Students Found')),
                   )
                 else
-                  _buildAttendanceList(),
+                  _buildSliverAttendanceList(),
               ],
             ],
           ),
@@ -340,6 +536,8 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
       ),
     );
   }
+
+  // ==================== BUILD METHODS ====================
 
   Widget _buildExamSelectorCard() {
     return Container(
@@ -543,6 +741,59 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildAckStatsRow() {
+    final present = _attendanceData!['presentCount'] ?? 0;
+    final acknowledged = _attendanceData!['acknowledgedCount'] ?? 0;
+    final unacknowledged = _attendanceData!['unacknowledgedCount'] ?? 0;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          _buildStatBadge('Acknowledged: $acknowledged', Colors.teal),
+          const SizedBox(width: 8),
+          _buildStatBadge('Pending: $unacknowledged', Colors.orange),
+          const Spacer(),
+          if (present > 0)
+            GestureDetector(
+              onTap: _toggleSelectionMode,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.purple.withOpacity(0.3)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.checklist_rounded, size: 16, color: Colors.purple),
+                    SizedBox(width: 4),
+                    Text('Batch Ack', style: TextStyle(fontSize: 12, color: Colors.purple)),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatBadge(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
       ),
     );
   }
@@ -860,159 +1111,308 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
     );
   }
 
-  SliverList _buildAttendanceList() {
+  AppBar _buildSelectionModeAppBar() {
+    return AppBar(
+      backgroundColor: Colors.purple,
+      elevation: 0,
+      leading: IconButton(
+        icon: const Icon(Icons.close_rounded, color: Colors.white),
+        onPressed: _toggleSelectionMode,
+      ),
+      title: Text(
+        '${_selectedAttendanceIds.length} selected',
+        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+      ),
+      centerTitle: true,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.select_all_rounded, color: Colors.white),
+          onPressed: _selectAll,
+          tooltip: 'Select All',
+        ),
+        if (_selectedAttendanceIds.isNotEmpty)
+          IconButton(
+            icon: const Icon(Icons.check_circle_rounded, color: Colors.white),
+            onPressed: _batchAcknowledge,
+            tooltip: 'Acknowledge Selected',
+          ),
+        IconButton(
+          icon: const Icon(Icons.deselect_rounded, color: Colors.white),
+          onPressed: _deselectAll,
+          tooltip: 'Deselect All',
+        ),
+      ],
+    );
+  }
+
+  // ==================== ATTENDANCE LIST METHODS ====================
+
+  SliverList _buildSliverAttendanceList() {
     final filteredStudents = _getFilteredStudents();
     
     return SliverList(
       delegate: SliverChildBuilderDelegate(
-        (context, index) {
-          final student = filteredStudents[index];
-          final status = student['status'] ?? 'absent';
-          final statusColor = _getStatusColor(status);
-          final scannedLocation = student['scannedLocation'];
-          final isOutside = scannedLocation != null && scannedLocation.toString().contains('Outside');
-          
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Container(
-              decoration: BoxDecoration(
-                color: AppColors.getCardBackground(context),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: statusColor.withOpacity(0.2), width: 1),
-              ),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () => _showStudentDetails(student),
-                  borderRadius: BorderRadius.circular(12),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        Container(width: 4, height: 40, decoration: BoxDecoration(
-                          color: statusColor,
-                          borderRadius: BorderRadius.circular(2),
-                        )),
-                        const SizedBox(width: 10),
-                        Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: statusColor.withOpacity(0.2),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: statusColor, width: 1.5),
-                          ),
-                          child: Center(
-                            child: Text(
-                              student['studentName']?[0]?.toUpperCase() ?? '?',
-                              style: TextStyle(color: statusColor, fontSize: 14, fontWeight: FontWeight.bold),
-                            ),
-                          ),
+        (context, index) => _buildAttendanceItem(filteredStudents[index]),
+        childCount: filteredStudents.length,
+      ),
+    );
+  }
+
+  ListView _buildBodyAttendanceList() {
+    final filteredStudents = _getFilteredStudents();
+    
+    return ListView.builder(
+      itemCount: filteredStudents.length,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemBuilder: (context, index) {
+        final student = filteredStudents[index];
+        return _buildAttendanceItem(student);
+      },
+    );
+  }
+
+  Widget _buildAttendanceItem(Map<String, dynamic> student) {
+    final status = student['status'] ?? 'absent';
+    final statusColor = _getStatusColor(status);
+    final scannedLocation = student['scannedLocation'];
+    final isOutside = scannedLocation != null && scannedLocation.toString().contains('Outside');
+    final isAcknowledged = student['isAcknowledged'] ?? false;
+    final attendanceId = student['attendanceId'];
+    final isPresent = status == 'present';
+
+    Color borderColor;
+    if (isPresent && !isAcknowledged) {
+      borderColor = Colors.orange;
+    } else if (isPresent && isAcknowledged) {
+      borderColor = Colors.teal;
+    } else {
+      borderColor = statusColor.withOpacity(0.2);
+    }
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.getCardBackground(context),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: borderColor, width: isPresent && !isAcknowledged ? 2 : 1),
+          boxShadow: isPresent && !isAcknowledged
+              ? [BoxShadow(color: Colors.orange.withOpacity(0.2), blurRadius: 8, offset: const Offset(0, 2))]
+              : null,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => _showStudentDetails(student),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  if (_isSelectionMode && isPresent)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Checkbox(
+                        value: _selectedAttendanceIds.contains(attendanceId),
+                        onChanged: (checked) {
+                          setState(() {
+                            if (checked == true) {
+                              _selectedAttendanceIds.add(attendanceId);
+                            } else {
+                              _selectedAttendanceIds.remove(attendanceId);
+                            }
+                          });
+                        },
+                        activeColor: Colors.purple,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                      ),
+                    ),
+                  Container(
+                    width: 4,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: isPresent && !isAcknowledged ? Colors.orange : statusColor,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: (isPresent && !isAcknowledged ? Colors.orange : statusColor).withOpacity(0.2),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: isPresent && !isAcknowledged ? Colors.orange : statusColor,
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        student['studentName']?[0]?.toUpperCase() ?? '?',
+                        style: TextStyle(
+                          color: isPresent && !isAcknowledged ? Colors.orange : statusColor,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
                                 student['studentName'] ?? 'Unknown',
                                 style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
-                              const SizedBox(height: 2),
-                              Row(
-                                children: [
-                                  Text(
-                                    student['studentId'] ?? '',
-                                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  if (student['indexNo']?.isNotEmpty == true) ...[
-                                    const SizedBox(width: 4),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.getPrimaryColor(context).withOpacity(0.1),
-                                        borderRadius: BorderRadius.circular(2),
-                                      ),
-                                      child: Text(
-                                        student['indexNo'],
-                                        style: TextStyle(
-                                          fontSize: 9,
-                                          color: AppColors.getPrimaryColor(context),
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (status == 'present' && isOutside)
-                          Container(
-                            margin: const EdgeInsets.only(right: 8),
-                            padding: const EdgeInsets.all(4),
-                            decoration: BoxDecoration(
-                              color: Colors.red.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.red.withOpacity(0.3), width: 0.5),
                             ),
-                            child: const Icon(
-                              Icons.warning_rounded,
-                              color: Colors.red,
-                              size: 16,
-                            ),
-                          ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          margin: const EdgeInsets.only(left: 4),
-                          decoration: BoxDecoration(
-                            color: statusColor.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: statusColor.withOpacity(0.3), width: 0.5),
-                          ),
-                          child: Text(
-                            status == 'present' ? 'P' : 'A',
-                            style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        if (status == 'absent')
-                          PopupMenuButton<String>(
-                            icon: Icon(Icons.more_vert, size: 16, color: Colors.grey[600]),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                            color: Colors.white,
-                            onSelected: (value) => _showMarkPresentDialog(student),
-                            itemBuilder: (context) => [
-                              const PopupMenuItem(
-                                value: 'mark_present',
-                                child: Row(
+                            if (isPresent && isAcknowledged)
+                              Container(
+                                margin: const EdgeInsets.only(left: 4),
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.teal.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.check_circle, color: Colors.green, size: 16),
-                                    SizedBox(width: 8),
-                                    Text('Mark Present', style: TextStyle(fontSize: 12)),
+                                    Icon(Icons.verified_rounded, color: Colors.teal, size: 12),
+                                    SizedBox(width: 2),
+                                    Text('Ack', style: TextStyle(fontSize: 8, color: Colors.teal, fontWeight: FontWeight.w600)),
                                   ],
                                 ),
                               ),
+                            if (isPresent && !isAcknowledged)
+                              Container(
+                                margin: const EdgeInsets.only(left: 4),
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.pending_rounded, color: Colors.orange, size: 12),
+                                    SizedBox(width: 2),
+                                    Text('Pending', style: TextStyle(fontSize: 8, color: Colors.orange, fontWeight: FontWeight.w600)),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            Text(
+                              student['studentId'] ?? '',
+                              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (student['indexNo']?.isNotEmpty == true) ...[
+                              const SizedBox(width: 4),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: AppColors.getPrimaryColor(context).withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                                child: Text(
+                                  student['indexNo'],
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    color: AppColors.getPrimaryColor(context),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
                             ],
-                          )
-                        else
-                          const SizedBox(width: 32),
+                          ],
+                        ),
                       ],
                     ),
                   ),
-                ),
+                  if (status == 'present' && isOutside)
+                    Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.red.withOpacity(0.3), width: 0.5),
+                      ),
+                      child: const Icon(Icons.warning_rounded, color: Colors.red, size: 16),
+                    ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    margin: const EdgeInsets.only(left: 4),
+                    decoration: BoxDecoration(
+                      color: statusColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: statusColor.withOpacity(0.3), width: 0.5),
+                    ),
+                    child: Text(
+                      status == 'present' ? 'P' : 'A',
+                      style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  if (!_isSelectionMode && status == 'present' && !isAcknowledged)
+                    PopupMenuButton<String>(
+                      icon: Icon(Icons.more_vert, size: 16, color: Colors.grey[600]),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      color: Colors.white,
+                      onSelected: (value) => _acknowledgeSingle(attendanceId),
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'acknowledge',
+                          child: Row(
+                            children: [
+                              Icon(Icons.verified_rounded, color: Colors.teal, size: 16),
+                              SizedBox(width: 8),
+                              Text('Acknowledge', style: TextStyle(fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    )
+                  else if (!_isSelectionMode && status == 'absent')
+                    PopupMenuButton<String>(
+                      icon: Icon(Icons.more_vert, size: 16, color: Colors.grey[600]),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      color: Colors.white,
+                      onSelected: (value) => _showMarkPresentDialog(student),
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'mark_present',
+                          child: Row(
+                            children: [
+                              Icon(Icons.check_circle, color: Colors.green, size: 16),
+                              SizedBox(width: 8),
+                              Text('Mark Present', style: TextStyle(fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    )
+                  else if (!_isSelectionMode)
+                    const SizedBox(width: 32),
+                ],
               ),
             ),
-          );
-        },
-        childCount: filteredStudents.length,
+          ),
+        ),
       ),
     );
   }
@@ -1073,6 +1473,9 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
     final initial = studentName.isNotEmpty ? studentName[0].toUpperCase() : '?';
     final scannedLocation = student['scannedLocation'];
     final isOutside = scannedLocation != null && scannedLocation.toString().contains('Outside');
+    final isAcknowledged = student['isAcknowledged'] ?? false;
+    final acknowledgedAt = student['acknowledgedAt'];
+    final acknowledgedBy = student['acknowledgedBy'];
     
     final studentData = _allStudents.firstWhere(
       (s) => s['studentId'] == student['studentId'],
@@ -1161,8 +1564,8 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                      Wrap(
+                        spacing: 8,
                         children: [
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -1187,6 +1590,35 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
                               ],
                             ),
                           ),
+                          if (status == 'present')
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: (isAcknowledged ? Colors.teal : Colors.orange).withOpacity(0.8),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.white.withOpacity(0.3)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    isAcknowledged ? Icons.verified_rounded : Icons.pending_rounded,
+                                    color: Colors.white,
+                                    size: 14,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    isAcknowledged ? 'ACKNOWLEDGED' : 'PENDING',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           if (status == 'present' && isOutside) ...[
                             const SizedBox(width: 8),
                             Container(
@@ -1202,7 +1634,7 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
                                   Icon(Icons.warning_rounded, color: Colors.white, size: 16),
                                   SizedBox(width: 4),
                                   Text(
-                                    'LOCATION MISMATCH',
+                                    'OUTSIDE CAMPUS',
                                     style: TextStyle(
                                       color: Colors.white,
                                       fontSize: 10,
@@ -1283,6 +1715,24 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
                               ? Colors.orange 
                               : Colors.teal,
                         ),
+                      if (status == 'present' && isAcknowledged) ...[
+                        const SizedBox(height: 12),
+                        _buildDetailItem(
+                          icon: Icons.verified_rounded,
+                          label: 'Acknowledged By',
+                          value: acknowledgedBy ?? 'Unknown',
+                          color: Colors.teal,
+                        ),
+                        const SizedBox(height: 12),
+                        _buildDetailItem(
+                          icon: Icons.access_time_rounded,
+                          label: 'Acknowledged At',
+                          value: acknowledgedAt != null
+                              ? DateFormat('dd/MM/yyyy HH:mm').format(acknowledgedAt)
+                              : 'Unknown',
+                          color: Colors.teal,
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       _buildDetailItem(
                         icon: Icons.subject_rounded,
@@ -1318,6 +1768,33 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
                           ),
                         ),
                       ),
+                      if (status == 'present' && !isAcknowledged) ...[
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              _acknowledgeSingle(student['attendanceId']);
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.teal,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 4,
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: const [
+                                Icon(Icons.verified_rounded, size: 18, color: Colors.white),
+                                SizedBox(width: 8),
+                                Text('Acknowledge'),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                       if (status == 'absent') ...[
                         const SizedBox(width: 12),
                         Expanded(
@@ -1450,7 +1927,6 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
                             ),
                             const SizedBox(height: 16),
                             
-                            // Seat Number Field
                             TextField(
                               controller: seatController,
                               decoration: InputDecoration(
@@ -1476,7 +1952,6 @@ class _AttendanceRecordsPageState extends State<AttendanceRecordsPage> with Tick
                             
                             const SizedBox(height: 16),
                             
-                            // Campus Selection 
                             Text(
                               'Scan Location (Campus)',
                               style: AppStyles.bodySmall.copyWith(
