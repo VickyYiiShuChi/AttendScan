@@ -33,10 +33,10 @@ dependencies:
     sdk: flutter
 
   # Firebase
-  firebase_core: ^3.0.0      # Required for all Firebase projects
-  firebase_auth: ^5.0.0      # For Authentication
-  cloud_firestore: ^5.6.12   # For Database
-  firebase_storage: ^12.2.0  # For File Storage
+  firebase_core: ^3.0.0     
+  firebase_auth: ^5.0.0     
+  cloud_firestore: ^5.6.12  
+  firebase_storage: ^12.2.0 
 
   # UI & Animations
   image_picker: ^1.0.4

@@ -51,10 +51,8 @@ class _AuthScreenState extends State<AuthScreen> {
                   child: IntrinsicHeight(
                     child: Column(
                       children: [
-                        // TOP SECTION - FIXED OVERFLOW
-                        // Using fixed height instead of percentage
                         Container(
-                          height: isLandscape ? 100 : 120, // Fixed height
+                          height: isLandscape ? 100 : 120, 
                           width: double.infinity,
                           padding: EdgeInsets.only(
                             top: paddingTop + (isLandscape ? 8 : 12),
