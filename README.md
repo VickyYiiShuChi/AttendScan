@@ -68,7 +68,7 @@ flutter run -d chrome
 ## 🛠️ Tech Stack & Cloud Infrastructure
 
 * **Frontend Mobile Client**: Flutter, Dart
-* **Admin Web Portal: Flutter Web, Hosted on Firebase Hosting
+* **Admin Web Portal**: Flutter Web, Hosted on Firebase Hosting
 * **Cloud AI Infrastructure**: Python, TensorFlow, Keras, OpenCV, Optuna
 * **AI Hosting Space**: [Hugging Face Spaces (vky-04/exam-attendance-app-api)](https://huggingface.co/spaces/vky-04/exam-attendance-app-api)
 
